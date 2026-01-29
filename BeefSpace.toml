@@ -1,0 +1,5 @@
+FileVersion = 1
+Projects = {Clang-C = {Path = "."}}
+
+[Workspace]
+StartupProject = "Clang-C"

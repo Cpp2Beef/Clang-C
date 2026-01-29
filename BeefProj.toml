@@ -1,0 +1,6 @@
+FileVersion = 1
+
+[Project]
+Name = "Clang-C"
+StartupObject = "LibClang.Program"
+DefaultNamespace = "LibClang"
