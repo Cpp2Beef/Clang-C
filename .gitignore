@@ -1,3 +1,9 @@
+clang-c
+clang-c.h
+src/clang-c.bf
+src/Platform.bf
+src/ExternC.bf
+
 recovery
 build
-BeefSpace_user.toml
+BeefSpace_User.toml

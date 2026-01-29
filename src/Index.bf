@@ -33,6 +33,7 @@ static
 
 
 
+
 /**
  * The version constants for the libclang API.
  * CINDEX_VERSION_MINOR should increase when there are API additions.
@@ -42,7 +43,7 @@ static
  * compatible, thus CINDEX_VERSION_MAJOR is expected to remain stable.
  */
 public const let CINDEX_VERSION_MAJOR = 0;
-public const let CINDEX_VERSION_MINOR = 62;
+public const let CINDEX_VERSION_MINOR = 64;
 
 
 
@@ -57,6 +58,10 @@ public const let CINDEX_VERSION
 public const let CINDEX_VERSION_STRING                                                   
   = CINDEX_VERSION_STRINGIZE(CINDEX_VERSION_MAJOR, CINDEX_VERSION_MINOR);
 }
+
+
+
+
 
 
 
@@ -290,6 +295,22 @@ extension Clang
 [Import(Clang.dll)] [LinkName("clang_disposeIndex")] public static extern void DisposeIndex(CXIndex index);
 }
 
+[AllowDuplicates] public enum CXChoice : c_int {
+  /**
+   * Use the default value of an option that may depend on the process
+   * environment.
+   */
+  Default = 0,
+  /**
+   * Enable the option.
+   */
+  Enabled = 1,
+  /**
+   * Disable the option.
+   */
+  Disabled = 2,
+}
+
 [AllowDuplicates] public enum CXGlobalOptFlags : c_int {
   /**
    * Used to indicate that no special CXIndex options are needed.
@@ -324,10 +345,132 @@ extension Clang
 
 }
 
+/**
+ * Index initialization options.
+ *
+ * 0 is the default value of each member of this struct except for Size.
+ * Initialize the struct in one of the following three ways to avoid adapting
+ * code each time a new member is added to it:
+ * \code
+ * CXIndexOptions Opts;
+ * memset(&Opts, 0, sizeof(Opts));
+ * Opts.Size = sizeof(CXIndexOptions);
+ * \endcode
+ * or explicitly initialize the first data member and zero-initialize the rest:
+ * \code
+ * CXIndexOptions Opts = { sizeof(CXIndexOptions) };
+ * \endcode
+ * or to prevent the -Wmissing-field-initializers warning for the above version:
+ * \code
+ * CXIndexOptions Opts{};
+ * Opts.Size = sizeof(CXIndexOptions);
+ * \endcode
+ */
+[CRepr] public struct CXIndexOptions {
+  /**
+   * The size of struct CXIndexOptions used for option versioning.
+   *
+   * Always initialize this member to sizeof(CXIndexOptions), or assign
+   * sizeof(CXIndexOptions) to it right after creating a CXIndexOptions object.
+   */
+  public c_uint Size;
+  /**
+   * A CXChoice enumerator that specifies the indexing priority policy.
+   * \sa CXGlobalOpt_ThreadBackgroundPriorityForIndexing
+   */
+  public c_uchar ThreadBackgroundPriorityForIndexing;
+  /**
+   * A CXChoice enumerator that specifies the editing priority policy.
+   * \sa CXGlobalOpt_ThreadBackgroundPriorityForEditing
+   */
+  public c_uchar ThreadBackgroundPriorityForEditing;
+  /**
+   * \see clang_createIndex()
+   */
+  public c_uint ExcludeDeclarationsFromPCH;
+  /**
+   * \see clang_createIndex()
+   */
+  public c_uint DisplayDiagnostics;
+  /**
+   * Store PCH in memory. If zero, PCH are stored in temporary files.
+   */
+  public c_uint StorePreamblesInMemory;
+  public c_uint ;
+
+  /**
+   * The path to a directory, in which to store temporary PCH files. If null or
+   * empty, the default system temporary directory is used. These PCH files are
+   * deleted on clean exit but stay on disk if the program crashes or is killed.
+   *
+   * This option is ignored if \a StorePreamblesInMemory is non-zero.
+   *
+   * Libclang does not create the directory at the specified path in the file
+   * system. Therefore it must exist, or storing PCH files will fail.
+   */
+  public c_char* PreambleStoragePath;
+  /**
+   * Specifies a path which will contain log files for certain libclang
+   * invocations. A null value implies that libclang invocations are not logged.
+   */
+  public c_char* InvocationEmissionPath;
+}
+
 extension Clang
 {
 /**
+ * Provides a shared context for creating translation units.
+ *
+ * Call this function instead of clang_createIndex() if you need to configure
+ * the additional options in CXIndexOptions.
+ *
+ * \returns The created index or null in case of error, such as an unsupported
+ * value of options->Size.
+ *
+ * For example:
+ * \code
+ * CXIndex createIndex(const char *ApplicationTemporaryPath) {
+ *   const int ExcludeDeclarationsFromPCH = 1;
+ *   const int DisplayDiagnostics = 1;
+ *   CXIndex Idx;
+ * #if CINDEX_VERSION_MINOR >= 64
+ *   CXIndexOptions Opts;
+ *   memset(&Opts, 0, sizeof(Opts));
+ *   Opts.Size = sizeof(CXIndexOptions);
+ *   Opts.ThreadBackgroundPriorityForIndexing = 1;
+ *   Opts.ExcludeDeclarationsFromPCH = ExcludeDeclarationsFromPCH;
+ *   Opts.DisplayDiagnostics = DisplayDiagnostics;
+ *   Opts.PreambleStoragePath = ApplicationTemporaryPath;
+ *   Idx = clang_createIndexWithOptions(&Opts);
+ *   if (Idx)
+ *     return Idx;
+ *   fprintf(stderr,
+ *           "clang_createIndexWithOptions() failed. "
+ *           "CINDEX_VERSION_MINOR = %d, sizeof(CXIndexOptions) = %u\n",
+ *           CINDEX_VERSION_MINOR, Opts.Size);
+ * #else
+ *   (void)ApplicationTemporaryPath;
+ * #endif
+ *   Idx = clang_createIndex(ExcludeDeclarationsFromPCH, DisplayDiagnostics);
+ *   clang_CXIndex_setGlobalOptions(
+ *       Idx, clang_CXIndex_getGlobalOptions(Idx) |
+ *                CXGlobalOpt_ThreadBackgroundPriorityForIndexing);
+ *   return Idx;
+ * }
+ * \endcode
+ *
+ * \sa clang_createIndex()
+ */
+
+[Import(Clang.dll)] [LinkName("clang_createIndexWithOptions")] public static extern CXIndex CreateIndexWithOptions(CXIndexOptions* options);
+
+/**
  * Sets general options associated with a CXIndex.
+ *
+ * This function is DEPRECATED. Set
+ * CXIndexOptions::ThreadBackgroundPriorityForIndexing and/or
+ * CXIndexOptions::ThreadBackgroundPriorityForEditing and call
+ * clang_createIndexWithOptions() instead.
  *
  * For example:
  * \code
@@ -344,6 +487,9 @@ extension Clang
 /**
  * Gets the general options associated with a CXIndex.
  *
+ * This function allows to obtain the final option values used by libclang after
+ * specifying the option policies via CXChoice enumerators.
+ *
  * \returns A bitmask of options, a bitwise OR of CXGlobalOpt_XXX flags that
  * are associated with the given CXIndex object.
  */
@@ -352,57 +498,15 @@ extension Clang
 /**
  * Sets the invocation emission path option in a CXIndex.
  *
+ * This function is DEPRECATED. Set CXIndexOptions::InvocationEmissionPath and
+ * call clang_createIndexWithOptions() instead.
+ *
  * The invocation emission path specifies a path which will contain log
  * files for certain libclang invocations. A null value (default) implies that
  * libclang invocations are not logged..
  */
 
 [Import(Clang.dll)] [LinkName("clang_CXIndex_setInvocationEmissionPathOption")] public static extern void CXIndex_SetInvocationEmissionPathOption(CXIndex, c_char* Path);
-}
-
-/**
- * \defgroup CINDEX_FILES File manipulation routines
- *
- * @{
- */
-
-/**
- * A particular source file that is part of a translation unit.
- */
-public struct CXFile : this(void* ptr);
-
-extension Clang
-{
-/**
- * Retrieve the complete file and path name of the given file.
- */
-[Import(Clang.dll)] [LinkName("clang_getFileName")] public static extern CXString GetFileName(CXFile SFile);
-
-/**
- * Retrieve the last modification time of the given file.
- */
-[Import(Clang.dll)] [LinkName("clang_getFileTime")] public static extern time_t GetFileTime(CXFile SFile);
-}
-
-/**
- * Uniquely identifies a CXFile, that refers to the same underlying file,
- * across an indexing session.
- */
-[CRepr] public struct CXFileUniqueID {
-  public c_ulonglong[3] data;
-}
-
-extension Clang
-{
-/**
- * Retrieve the unique ID for the given \c file.
- *
- * \param file the file to get the ID for.
- * \param outID stores the returned CXFileUniqueID.
- * \returns If there was a failure getting the unique ID, returns non-zero,
- * otherwise returns 0.
- */
-[Import(Clang.dll)] [LinkName("clang_getFileUniqueID")] public static extern c_int GetFileUniqueID(CXFile file, CXFileUniqueID* outID);
 
 /**
  * Determine whether the given header is guarded against
@@ -438,78 +542,6 @@ extension Clang
 [Import(Clang.dll)] [LinkName("clang_getFileContents")] public static extern c_char* GetFileContents(CXTranslationUnit tu, CXFile file, out c_size size);
 
 /**
- * Returns non-zero if the \c file1 and \c file2 point to the same file,
- * or they are both NULL.
- */
-[Import(Clang.dll)] [LinkName("clang_File_isEqual")] public static extern c_int File_IsEqual(CXFile file1, CXFile file2);
-
-/**
- * Returns the real path name of \c file.
- *
- * An empty string may be returned. Use \c clang_getFileName() in that case.
- */
-[Import(Clang.dll)] [LinkName("clang_File_tryGetRealPathName")] public static extern CXString File_TryGetRealPathName(CXFile file);
-}
-
-/**
- * @}
- */
-
-/**
- * \defgroup CINDEX_LOCATIONS Physical source locations
- *
- * Clang represents physical source locations in its abstract syntax tree in
- * great detail, with file, line, and column information for the majority of
- * the tokens parsed in the source code. These data types and functions are
- * used to represent source location information, either for a particular
- * point in the program or for a range of points in the program, and extract
- * specific location information from those data types.
- *
- * @{
- */
-
-/**
- * Identifies a specific source location within a translation
- * unit.
- *
- * Use clang_getExpansionLocation() or clang_getSpellingLocation()
- * to map a source location to a particular file, line, and column.
- */
-[CRepr] public struct CXSourceLocation {
-  public void*[2] ptr_data;
-  public c_uint int_data;
-}
-
-/**
- * Identifies a half-open character range in the source code.
- *
- * Use clang_getRangeStart() and clang_getRangeEnd() to retrieve the
- * starting and end locations from a source range, respectively.
- */
-[CRepr] public struct CXSourceRange {
-  public void*[2] ptr_data;
-  public c_uint begin_int_data;
-  public c_uint end_int_data;
-}
-
-extension Clang
-{
-/**
- * Retrieve a NULL (invalid) source location.
- */
-[Import(Clang.dll)] [LinkName("clang_getNullLocation")] public static extern CXSourceLocation GetNullLocation();
-
-/**
- * Determine whether two source locations, which must refer into
- * the same translation unit, refer to exactly the same point in the source
- * code.
- *
- * \returns non-zero if the source locations refer to the same location, zero
- * if they refer to different locations.
- */
-[Import(Clang.dll)] [LinkName("clang_equalLocations")] public static extern c_uint EqualLocations(CXSourceLocation loc1, CXSourceLocation loc2);
-
-/**
  * Retrieves the source location associated with a given file/line/column
  * in a particular translation unit.
  */
@@ -520,192 +552,6 @@ extension Clang
  */
 [Import(Clang.dll)] [LinkName("clang_getLocationForOffset")] public static extern CXSourceLocation GetLocationForOffset(CXTranslationUnit tu, CXFile file, c_uint offset);
 
-/**
- * Returns non-zero if the given source location is in a system header.
- */
-[Import(Clang.dll)] [LinkName("clang_Location_isInSystemHeader")] public static extern c_int Location_IsInSystemHeader(CXSourceLocation location);
-
-/**
- * Returns non-zero if the given source location is in the main file of
- * the corresponding translation unit.
- */
-[Import(Clang.dll)] [LinkName("clang_Location_isFromMainFile")] public static extern c_int Location_IsFromMainFile(CXSourceLocation location);
-
-/**
- * Retrieve a NULL (invalid) source range.
- */
-[Import(Clang.dll)] [LinkName("clang_getNullRange")] public static extern CXSourceRange GetNullRange();
-
-/**
- * Retrieve a source range given the beginning and ending source
- * locations.
- */
-[Import(Clang.dll)] [LinkName("clang_getRange")] public static extern CXSourceRange GetRange(CXSourceLocation begin, CXSourceLocation end);
-
-/**
- * Determine whether two ranges are equivalent.
- *
- * \returns non-zero if the ranges are the same, zero if they differ.
- */
-[Import(Clang.dll)] [LinkName("clang_equalRanges")] public static extern c_uint EqualRanges(CXSourceRange range1, CXSourceRange range2);
-
-/**
- * Returns non-zero if \p range is null.
- */
-[Import(Clang.dll)] [LinkName("clang_Range_isNull")] public static extern c_int Range_IsNull(CXSourceRange range);
-
-/**
- * Retrieve the file, line, column, and offset represented by
- * the given source location.
- *
- * If the location refers into a macro expansion, retrieves the
- * location of the macro expansion.
- *
- * \param location the location within a source file that will be decomposed
- * into its parts.
- *
- * \param file [out] if non-NULL, will be set to the file to which the given
- * source location points.
- *
- * \param line [out] if non-NULL, will be set to the line to which the given
- * source location points.
- *
- * \param column [out] if non-NULL, will be set to the column to which the given
- * source location points.
- *
- * \param offset [out] if non-NULL, will be set to the offset into the
- * buffer to which the given source location points.
- */
-[Import(Clang.dll)] [LinkName("clang_getExpansionLocation")] public static extern void GetExpansionLocation(CXSourceLocation location, out CXFile file, out c_uint line, out c_uint column, out c_uint offset);
-
-/**
- * Retrieve the file, line and column represented by the given source
- * location, as specified in a # line directive.
- *
- * Example: given the following source code in a file somefile.c
- *
- * \code
- * #123 "dummy.c" 1
- *
- * static int func(void)
- * {
- *     return 0;
- * }
- * \endcode
- *
- * the location information returned by this function would be
- *
- * File: dummy.c Line: 124 Column: 12
- *
- * whereas clang_getExpansionLocation would have returned
- *
- * File: somefile.c Line: 3 Column: 12
- *
- * \param location the location within a source file that will be decomposed
- * into its parts.
- *
- * \param filename [out] if non-NULL, will be set to the filename of the
- * source location. Note that filenames returned will be for "virtual" files,
- * which don't necessarily exist on the machine running clang - e.g. when
- * parsing preprocessed output obtained from a different environment. If
- * a non-NULL value is passed in, remember to dispose of the returned value
- * using \c clang_disposeString() once you've finished with it. For an invalid
- * source location, an empty string is returned.
- *
- * \param line [out] if non-NULL, will be set to the line number of the
- * source location. For an invalid source location, zero is returned.
- *
- * \param column [out] if non-NULL, will be set to the column number of the
- * source location. For an invalid source location, zero is returned.
- */
-[Import(Clang.dll)] [LinkName("clang_getPresumedLocation")] public static extern void GetPresumedLocation(CXSourceLocation location, out CXString filename, out c_uint line, out c_uint column);
-
-/**
- * Legacy API to retrieve the file, line, column, and offset represented
- * by the given source location.
- *
- * This interface has been replaced by the newer interface
- * #clang_getExpansionLocation(). See that interface's documentation for
- * details.
- */
-[Import(Clang.dll)] [LinkName("clang_getInstantiationLocation")] public static extern void GetInstantiationLocation(CXSourceLocation location, CXFile* file, c_uint* line, c_uint* column, c_uint* offset);
-
-/**
- * Retrieve the file, line, column, and offset represented by
- * the given source location.
- *
- * If the location refers into a macro instantiation, return where the
- * location was originally spelled in the source file.
- *
- * \param location the location within a source file that will be decomposed
- * into its parts.
- *
- * \param file [out] if non-NULL, will be set to the file to which the given
- * source location points.
- *
- * \param line [out] if non-NULL, will be set to the line to which the given
- * source location points.
- *
- * \param column [out] if non-NULL, will be set to the column to which the given
- * source location points.
- *
- * \param offset [out] if non-NULL, will be set to the offset into the
- * buffer to which the given source location points.
- */
-[Import(Clang.dll)] [LinkName("clang_getSpellingLocation")] public static extern void GetSpellingLocation(CXSourceLocation location, out CXFile file, out c_uint line, out c_uint column, out c_uint offset);
-
-/**
- * Retrieve the file, line, column, and offset represented by
- * the given source location.
- *
- * If the location refers into a macro expansion, return where the macro was
- * expanded or where the macro argument was written, if the location points at
- * a macro argument.
- *
- * \param location the location within a source file that will be decomposed
- * into its parts.
- *
- * \param file [out] if non-NULL, will be set to the file to which the given
- * source location points.
- *
- * \param line [out] if non-NULL, will be set to the line to which the given
- * source location points.
- *
- * \param column [out] if non-NULL, will be set to the column to which the given
- * source location points.
- *
- * \param offset [out] if non-NULL, will be set to the offset into the
- * buffer to which the given source location points.
- */
-[Import(Clang.dll)] [LinkName("clang_getFileLocation")] public static extern void GetFileLocation(CXSourceLocation location, out CXFile file, out c_uint line, out c_uint column, out c_uint offset);
-
-/**
- * Retrieve a source location representing the first character within a
- * source range.
- */
-[Import(Clang.dll)] [LinkName("clang_getRangeStart")] public static extern CXSourceLocation GetRangeStart(CXSourceRange range);
-
-/**
- * Retrieve a source location representing the last character within a
- * source range.
- */
-[Import(Clang.dll)] [LinkName("clang_getRangeEnd")] public static extern CXSourceLocation GetRangeEnd(CXSourceRange range);
-}
-
-/**
- * Identifies an array of ranges.
- */
-[CRepr] public struct CXSourceRangeList {
-  /** The number of ranges in the \c ranges array. */
-  public c_uint count;
-  /**
-   * An array of \c CXSourceRanges.
-   */
-  public CXSourceRange* ranges;
-}
-
-extension Clang
-{
 /**
  * Retrieve all ranges that were skipped by the preprocessor.
  *
@@ -723,146 +569,6 @@ extension Clang
  */
 
 [Import(Clang.dll)] [LinkName("clang_getAllSkippedRanges")] public static extern CXSourceRangeList* GetAllSkippedRanges(CXTranslationUnit tu);
-
-/**
- * Destroy the given \c CXSourceRangeList.
- */
-[Import(Clang.dll)] [LinkName("clang_disposeSourceRangeList")] public static extern void DisposeSourceRangeList(CXSourceRangeList* ranges);
-}
-
-/**
- * @}
- */
-
-/**
- * \defgroup CINDEX_DIAG Diagnostic reporting
- *
- * @{
- */
-
-/**
- * Describes the severity of a particular diagnostic.
- */
-[AllowDuplicates] public enum CXDiagnosticSeverity : c_int {
-  /**
-   * A diagnostic that has been suppressed, e.g., by a command-line
-   * option.
-   */
-  Ignored = 0,
-
-  /**
-   * This diagnostic is a note that should be attached to the
-   * previous (non-note) diagnostic.
-   */
-  Note = 1,
-
-  /**
-   * This diagnostic indicates suspicious code that may not be
-   * wrong.
-   */
-  Warning = 2,
-
-  /**
-   * This diagnostic indicates that the code is ill-formed.
-   */
-  Error = 3,
-
-  /**
-   * This diagnostic indicates that the code is ill-formed such
-   * that future parser recovery is unlikely to produce useful
-   * results.
-   */
-  Fatal = 4,
-}
-
-/**
- * A single diagnostic, containing the diagnostic's severity,
- * location, text, source ranges, and fix-it hints.
- */
-public struct CXDiagnostic : this(void* ptr);
-
-/**
- * A group of CXDiagnostics.
- */
-public struct CXDiagnosticSet : this(void* ptr);
-
-extension Clang
-{
-/**
- * Determine the number of diagnostics in a CXDiagnosticSet.
- */
-[Import(Clang.dll)] [LinkName("clang_getNumDiagnosticsInSet")] public static extern c_uint GetNumDiagnosticsInSet(CXDiagnosticSet Diags);
-
-/**
- * Retrieve a diagnostic associated with the given CXDiagnosticSet.
- *
- * \param Diags the CXDiagnosticSet to query.
- * \param Index the zero-based diagnostic number to retrieve.
- *
- * \returns the requested diagnostic. This diagnostic must be freed
- * via a call to \c clang_disposeDiagnostic().
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticInSet")] public static extern CXDiagnostic GetDiagnosticInSet(CXDiagnosticSet Diags, c_uint Index);
-}
-
-/**
- * Describes the kind of error that occurred (if any) in a call to
- * \c clang_loadDiagnostics.
- */
-[AllowDuplicates] public enum CXLoadDiag_Error : c_int {
-  /**
-   * Indicates that no error occurred.
-   */
-  None = 0,
-
-  /**
-   * Indicates that an unknown error occurred while attempting to
-   * deserialize diagnostics.
-   */
-  Unknown = 1,
-
-  /**
-   * Indicates that the file containing the serialized diagnostics
-   * could not be opened.
-   */
-  CannotLoad = 2,
-
-  /**
-   * Indicates that the serialized diagnostics file is invalid or
-   * corrupt.
-   */
-  InvalidFile = 3,
-}
-
-extension Clang
-{
-/**
- * Deserialize a set of diagnostics from a Clang diagnostics bitcode
- * file.
- *
- * \param file The name of the file to deserialize.
- * \param error A pointer to a enum value recording if there was a problem
- *        deserializing the diagnostics.
- * \param errorString A pointer to a CXString for recording the error string
- *        if the file was not successfully loaded.
- *
- * \returns A loaded CXDiagnosticSet if successful, and NULL otherwise.  These
- * diagnostics should be released using clang_disposeDiagnosticSet().
- */
-[Import(Clang.dll)] [LinkName("clang_loadDiagnostics")] public static extern CXDiagnosticSet LoadDiagnostics(c_char* file, CXLoadDiag_Error* error, CXString* errorString);
-
-/**
- * Release a CXDiagnosticSet and all of its contained diagnostics.
- */
-[Import(Clang.dll)] [LinkName("clang_disposeDiagnosticSet")] public static extern void DisposeDiagnosticSet(CXDiagnosticSet Diags);
-
-/**
- * Retrieve the child diagnostics of a CXDiagnostic.
- *
- * This CXDiagnosticSet does not need to be released by
- * clang_disposeDiagnosticSet.
- */
-[Import(Clang.dll)] [LinkName("clang_getChildDiagnostics")] public static extern CXDiagnosticSet GetChildDiagnostics(CXDiagnostic D);
 
 /**
  * Determine the number of diagnostics produced for the given
@@ -889,231 +595,6 @@ extension Clang
  */
 
 [Import(Clang.dll)] [LinkName("clang_getDiagnosticSetFromTU")] public static extern CXDiagnosticSet GetDiagnosticSetFromTU(CXTranslationUnit Unit);
-
-/**
- * Destroy a diagnostic.
- */
-[Import(Clang.dll)] [LinkName("clang_disposeDiagnostic")] public static extern void DisposeDiagnostic(CXDiagnostic Diagnostic);
-}
-
-/**
- * Options to control the display of diagnostics.
- *
- * The values in this enum are meant to be combined to customize the
- * behavior of \c clang_formatDiagnostic().
- */
-[AllowDuplicates] public enum CXDiagnosticDisplayOptions : c_int {
-  /**
-   * Display the source-location information where the
-   * diagnostic was located.
-   *
-   * When set, diagnostics will be prefixed by the file, line, and
-   * (optionally) column to which the diagnostic refers. For example,
-   *
-   * \code
-   * test.c:28: warning: extra tokens at end of #endif directive
-   * \endcode
-   *
-   * This option corresponds to the clang flag \c -fshow-source-location.
-   */
-  DisplaySourceLocation = 0x01,
-
-  /**
-   * If displaying the source-location information of the
-   * diagnostic, also include the column number.
-   *
-   * This option corresponds to the clang flag \c -fshow-column.
-   */
-  DisplayColumn = 0x02,
-
-  /**
-   * If displaying the source-location information of the
-   * diagnostic, also include information about source ranges in a
-   * machine-parsable format.
-   *
-   * This option corresponds to the clang flag
-   * \c -fdiagnostics-print-source-range-info.
-   */
-  DisplaySourceRanges = 0x04,
-
-  /**
-   * Display the option name associated with this diagnostic, if any.
-   *
-   * The option name displayed (e.g., -Wconversion) will be placed in brackets
-   * after the diagnostic text. This option corresponds to the clang flag
-   * \c -fdiagnostics-show-option.
-   */
-  DisplayOption = 0x08,
-
-  /**
-   * Display the category number associated with this diagnostic, if any.
-   *
-   * The category number is displayed within brackets after the diagnostic text.
-   * This option corresponds to the clang flag
-   * \c -fdiagnostics-show-category=id.
-   */
-  DisplayCategoryId = 0x10,
-
-  /**
-   * Display the category name associated with this diagnostic, if any.
-   *
-   * The category name is displayed within brackets after the diagnostic text.
-   * This option corresponds to the clang flag
-   * \c -fdiagnostics-show-category=name.
-   */
-  DisplayCategoryName = 0x20,
-}
-
-extension Clang
-{
-/**
- * Format the given diagnostic in a manner that is suitable for display.
- *
- * This routine will format the given diagnostic to a string, rendering
- * the diagnostic according to the various options given. The
- * \c clang_defaultDiagnosticDisplayOptions() function returns the set of
- * options that most closely mimics the behavior of the clang compiler.
- *
- * \param Diagnostic The diagnostic to print.
- *
- * \param Options A set of options that control the diagnostic display,
- * created by combining \c CXDiagnosticDisplayOptions values.
- *
- * \returns A new string containing for formatted diagnostic.
- */
-[Import(Clang.dll)] [LinkName("clang_formatDiagnostic")] public static extern CXString FormatDiagnostic(CXDiagnostic Diagnostic, c_uint Options);
-
-/**
- * Retrieve the set of display options most similar to the
- * default behavior of the clang compiler.
- *
- * \returns A set of display options suitable for use with \c
- * clang_formatDiagnostic().
- */
-[Import(Clang.dll)] [LinkName("clang_defaultDiagnosticDisplayOptions")] public static extern c_uint DefaultDiagnosticDisplayOptions();
-
-/**
- * Determine the severity of the given diagnostic.
- */
-
-    [Import(Clang.dll)] [LinkName("clang_getDiagnosticSeverity")] public static extern CXDiagnosticSeverity GetDiagnosticSeverity(CXDiagnostic);
-
-/**
- * Retrieve the source location of the given diagnostic.
- *
- * This location is where Clang would print the caret ('^') when
- * displaying the diagnostic on the command line.
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticLocation")] public static extern CXSourceLocation GetDiagnosticLocation(CXDiagnostic);
-
-/**
- * Retrieve the text of the given diagnostic.
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticSpelling")] public static extern CXString GetDiagnosticSpelling(CXDiagnostic);
-
-/**
- * Retrieve the name of the command-line option that enabled this
- * diagnostic.
- *
- * \param Diag The diagnostic to be queried.
- *
- * \param Disable If non-NULL, will be set to the option that disables this
- * diagnostic (if any).
- *
- * \returns A string that contains the command-line option used to enable this
- * warning, such as "-Wconversion" or "-pedantic".
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticOption")] public static extern CXString GetDiagnosticOption(CXDiagnostic Diag, CXString* Disable);
-
-/**
- * Retrieve the category number for this diagnostic.
- *
- * Diagnostics can be categorized into groups along with other, related
- * diagnostics (e.g., diagnostics under the same warning flag). This routine
- * retrieves the category number for the given diagnostic.
- *
- * \returns The number of the category that contains this diagnostic, or zero
- * if this diagnostic is uncategorized.
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticCategory")] public static extern c_uint GetDiagnosticCategory(CXDiagnostic);
-
-/**
- * Retrieve the name of a particular diagnostic category.  This
- *  is now deprecated.  Use clang_getDiagnosticCategoryText()
- *  instead.
- *
- * \param Category A diagnostic category number, as returned by
- * \c clang_getDiagnosticCategory().
- *
- * \returns The name of the given diagnostic category.
- */
-
-[Import(Clang.dll)] [Obsolete] [LinkName("clang_getDiagnosticCategoryName")] public static extern CXString GetDiagnosticCategoryName(c_uint Category);
-
-/**
- * Retrieve the diagnostic category text for a given diagnostic.
- *
- * \returns The text of the given diagnostic category.
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticCategoryText")] public static extern CXString GetDiagnosticCategoryText(CXDiagnostic);
-
-/**
- * Determine the number of source ranges associated with the given
- * diagnostic.
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticNumRanges")] public static extern c_uint GetDiagnosticNumRanges(CXDiagnostic);
-
-/**
- * Retrieve a source range associated with the diagnostic.
- *
- * A diagnostic's source ranges highlight important elements in the source
- * code. On the command line, Clang displays source ranges by
- * underlining them with '~' characters.
- *
- * \param Diagnostic the diagnostic whose range is being extracted.
- *
- * \param Range the zero-based index specifying which range to
- *
- * \returns the requested source range.
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticRange")] public static extern CXSourceRange GetDiagnosticRange(CXDiagnostic Diagnostic, c_uint Range);
-
-/**
- * Determine the number of fix-it hints associated with the
- * given diagnostic.
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticNumFixIts")] public static extern c_uint GetDiagnosticNumFixIts(CXDiagnostic Diagnostic);
-
-/**
- * Retrieve the replacement information for a given fix-it.
- *
- * Fix-its are described in terms of a source range whose contents
- * should be replaced by a string. This approach generalizes over
- * three kinds of operations: removal of source code (the range covers
- * the code to be removed and the replacement string is empty),
- * replacement of source code (the range covers the code to be
- * replaced and the replacement string provides the new code), and
- * insertion (both the start and end of the range point at the
- * insertion location, and the replacement string provides the text to
- * insert).
- *
- * \param Diagnostic The diagnostic whose fix-its are being queried.
- *
- * \param FixIt The zero-based index of the fix-it.
- *
- * \param ReplacementRange The source range whose contents will be
- * replaced with the returned replacement string. Note that source
- * ranges are half-open ranges [a, b), so the source code should be
- * replaced from a and up to (but not including) b.
- *
- * \returns A string containing text that should be replace the source
- * code indicated by the \c ReplacementRange.
- */
-[Import(Clang.dll)] [LinkName("clang_getDiagnosticFixIt")] public static extern CXString GetDiagnosticFixIt(CXDiagnostic Diagnostic, c_uint FixIt, CXSourceRange* ReplacementRange);
-
-/**
- * @}
- */
 
 /**
  * \defgroup CINDEX_TRANSLATION_UNIT Translation unit manipulation
@@ -2171,8 +1652,9 @@ extension Clang
   ObjCSelfExpr = 146,
 
   /** OpenMP 5.0 [2.1.5, Array Section].
+   * OpenACC 3.3 [2.7.1, Data Specification for Data Clauses (Sub Arrays)]
    */
-  OMPArraySectionExpr = 147,
+  ArraySectionExpr = 147,
 
   /** Represents an @available(...) check.
    */
@@ -2202,11 +1684,22 @@ extension Clang
   ConceptSpecializationExpr = 153,
 
   /**
-   * Expression that references a C++20 concept.
+   * Expression that references a C++20 requires expression.
    */
   RequiresExpr = 154,
 
-  LastExpr = RequiresExpr,
+  /**
+   * Expression that references a C++20 parenthesized list aggregate
+   * initializer.
+   */
+  CXXParenListInitExpr = 155,
+
+  /**
+   *  Represents a C++26 pack indexing expression.
+   */
+  PackIndexingExpr = 156,
+
+  LastExpr = PackIndexingExpr,
 
   /* Statements */
   FirstStmt = 200,
@@ -2653,7 +2146,91 @@ extension Clang
    */
   OMPParallelMaskedTaskLoopSimdDirective = 304,
 
-  LastStmt = OMPParallelMaskedTaskLoopSimdDirective,
+  /** OpenMP error directive.
+   */
+  OMPErrorDirective = 305,
+
+  /** OpenMP scope directive.
+   */
+  OMPScopeDirective = 306,
+
+  /** OpenMP reverse directive.
+   */
+  OMPReverseDirective = 307,
+
+  /** OpenMP interchange directive.
+   */
+  OMPInterchangeDirective = 308,
+
+  /** OpenMP assume directive.
+   */
+  OMPAssumeDirective = 309,
+
+  /** OpenMP assume directive.
+   */
+  OMPStripeDirective = 310,
+
+  /** OpenMP fuse directive
+   */
+  OMPFuseDirective = 311,
+
+  /** OpenACC Compute Construct.
+   */
+  OpenACCComputeConstruct = 320,
+
+  /** OpenACC Loop Construct.
+   */
+  OpenACCLoopConstruct = 321,
+
+  /** OpenACC Combined Constructs.
+   */
+  OpenACCCombinedConstruct = 322,
+
+  /** OpenACC data Construct.
+   */
+  OpenACCDataConstruct = 323,
+
+  /** OpenACC enter data Construct.
+   */
+  OpenACCEnterDataConstruct = 324,
+
+  /** OpenACC exit data Construct.
+   */
+  OpenACCExitDataConstruct = 325,
+
+  /** OpenACC host_data Construct.
+   */
+  OpenACCHostDataConstruct = 326,
+
+  /** OpenACC wait Construct.
+   */
+  OpenACCWaitConstruct = 327,
+
+  /** OpenACC init Construct.
+   */
+  OpenACCInitConstruct = 328,
+
+  /** OpenACC shutdown Construct.
+   */
+  OpenACCShutdownConstruct = 329,
+
+  /** OpenACC set Construct.
+   */
+  OpenACCSetConstruct = 330,
+
+  /** OpenACC update Construct.
+   */
+  OpenACCUpdateConstruct = 331,
+
+  /** OpenACC atomic Construct.
+   */
+  OpenACCAtomicConstruct = 332,
+
+  /** OpenACC cache Construct.
+   */
+  OpenACCCacheConstruct = 333,
+
+  LastStmt = OpenACCCacheConstruct,
 
   /**
    * Cursor that represents the translation unit itself.
@@ -3466,15 +3043,25 @@ extension Clang
   OCLIntelSubgroupAVCImeResult = 169,
   OCLIntelSubgroupAVCRefResult = 170,
   OCLIntelSubgroupAVCSicResult = 171,
+  OCLIntelSubgroupAVCImeResultSingleReferenceStreamout = 172,
+  OCLIntelSubgroupAVCImeResultDualReferenceStreamout = 173,
+  OCLIntelSubgroupAVCImeSingleReferenceStreamin = 174,
+  OCLIntelSubgroupAVCImeDualReferenceStreamin = 175,
+
+  /* Old aliases for AVC OpenCL extension types. */
   OCLIntelSubgroupAVCImeResultSingleRefStreamout = 172,
   OCLIntelSubgroupAVCImeResultDualRefStreamout = 173,
   OCLIntelSubgroupAVCImeSingleRefStreamin = 174,
-
   OCLIntelSubgroupAVCImeDualRefStreamin = 175,
 
   ExtVector = 176,
   Atomic = 177,
   BTFTagAttributed = 178,
+
+  /* HLSL Types */
+  HLSLResource = 179,
+  HLSLAttributedResource = 180,
+  HLSLInlineSpirv = 181,
 }
 
 /**
@@ -3502,6 +3089,21 @@ extension Clang
   AArch64VectorCall = 16,
   SwiftAsync = 17,
   AArch64SVEPCS = 18,
+  M68kRTD = 19,
+  PreserveNone = 20,
+  RISCVVectorCall = 21,
+  RISCVVLSCall_32 = 22,
+  RISCVVLSCall_64 = 23,
+  RISCVVLSCall_128 = 24,
+  RISCVVLSCall_256 = 25,
+  RISCVVLSCall_512 = 26,
+  RISCVVLSCall_1024 = 27,
+  RISCVVLSCall_2048 = 28,
+  RISCVVLSCall_4096 = 29,
+  RISCVVLSCall_8192 = 30,
+  RISCVVLSCall_16384 = 31,
+  RISCVVLSCall_32768 = 32,
+  RISCVVLSCall_65536 = 33,
 
   Invalid = 100,
   Unexposed = 200,
@@ -3569,9 +3171,25 @@ extension Clang
 [Import(Clang.dll)] [LinkName("clang_getEnumConstantDeclUnsignedValue")] public static extern c_ulonglong GetEnumConstantDeclUnsignedValue(CXCursor C);
 
 /**
- * Retrieve the bit width of a bit field declaration as an integer.
+ * Returns non-zero if the cursor specifies a Record member that is a bit-field.
+ */
+[Import(Clang.dll)] [LinkName("clang_Cursor_isBitField")] public static extern c_uint Cursor_IsBitField(CXCursor C);
+
+/**
+ * Retrieve the bit width of a bit-field declaration as an integer.
  *
- * If a cursor that is not a bit field declaration is passed in, -1 is returned.
+ * If the cursor does not reference a bit-field, or if the bit-field's width
+ * expression cannot be evaluated, -1 is returned.
+ *
+ * For example:
+ * \code
+ * if (clang_Cursor_isBitField(Cursor)) {
+ *   int Width = clang_getFieldDeclBitWidth(Cursor);
+ *   if (Width != -1) {
+ *     // The bit-field width is not value-dependent.
+ *   }
+ * }
+ * \endcode
  */
 [Import(Clang.dll)] [LinkName("clang_getFieldDeclBitWidth")] public static extern c_int GetFieldDeclBitWidth(CXCursor C);
 
@@ -3617,8 +3235,8 @@ extension Clang
 extension Clang
 {
 /**
- *Returns the number of template args of a function decl representing a
- * template specialization.
+ * Returns the number of template args of a function, struct, or class decl
+ * representing a template specialization.
  *
  * If the argument cursor cannot be converted into a template function
  * declaration, -1 is returned.
@@ -3637,8 +3255,9 @@ extension Clang
 /**
  * Retrieve the kind of the I'th template argument of the CXCursor C.
  *
- * If the argument CXCursor does not represent a FunctionDecl, an invalid
- * template argument kind is returned.
+ * If the argument CXCursor does not represent a FunctionDecl, StructDecl, or
+ * ClassTemplatePartialSpecialization, an invalid template argument kind is
+ * returned.
  *
  * For example, for the following declaration and specialization:
  *   template <typename T, int kInt, bool kBool>
@@ -3657,9 +3276,9 @@ extension Clang
  * Retrieve a CXType representing the type of a TemplateArgument of a
  *  function decl representing a template specialization.
  *
- * If the argument CXCursor does not represent a FunctionDecl whose I'th
- * template argument has a kind of CXTemplateArgKind_Integral, an invalid type
- * is returned.
+ * If the argument CXCursor does not represent a FunctionDecl, StructDecl,
+ * ClassDecl or ClassTemplatePartialSpecialization whose I'th template argument
+ * has a kind of CXTemplateArgKind_Integral, an invalid type is returned.
  *
  * For example, for the following declaration and specialization:
  *   template <typename T, int kInt, bool kBool>
@@ -3678,7 +3297,8 @@ extension Clang
  *  decl representing a template specialization) as a signed long long.
  *
  * It is undefined to call this function on a CXCursor that does not represent a
- * FunctionDecl or whose I'th template argument is not an integral value.
+ * FunctionDecl, StructDecl, ClassDecl or ClassTemplatePartialSpecialization
+ * whose I'th template argument is not an integral value.
  *
  * For example, for the following declaration and specialization:
  *   template <typename T, int kInt, bool kBool>
@@ -3697,7 +3317,8 @@ extension Clang
  *  decl representing a template specialization) as an unsigned long long.
  *
  * It is undefined to call this function on a CXCursor that does not represent a
- * FunctionDecl or whose I'th template argument is not an integral value.
+ * FunctionDecl, StructDecl, ClassDecl or ClassTemplatePartialSpecialization or
+ * whose I'th template argument is not an integral value.
  *
  * For example, for the following declaration and specialization:
  *   template <typename T, int kInt, bool kBool>
@@ -3783,6 +3404,54 @@ extension Clang
  * For pointer types, returns the type of the pointee.
  */
 [Import(Clang.dll)] [LinkName("clang_getPointeeType")] public static extern CXType GetPointeeType(CXType T);
+
+/**
+ * Retrieve the unqualified variant of the given type, removing as
+ * little sugar as possible.
+ *
+ * For example, given the following series of typedefs:
+ *
+ * \code
+ * typedef int Integer;
+ * typedef const Integer CInteger;
+ * typedef CInteger DifferenceType;
+ * \endcode
+ *
+ * Executing \c clang_getUnqualifiedType() on a \c CXType that
+ * represents \c DifferenceType, will desugar to a type representing
+ * \c Integer, that has no qualifiers.
+ *
+ * And, executing \c clang_getUnqualifiedType() on the type of the
+ * first argument of the following function declaration:
+ *
+ * \code
+ * void foo(const int);
+ * \endcode
+ *
+ * Will return a type representing \c int, removing the \c const
+ * qualifier.
+ *
+ * Sugar over array types is not desugared.
+ *
+ * A type can be checked for qualifiers with \c
+ * clang_isConstQualifiedType(), \c clang_isVolatileQualifiedType()
+ * and \c clang_isRestrictQualifiedType().
+ *
+ * A type that resulted from a call to \c clang_getUnqualifiedType
+ * will return \c false for all of the above calls.
+ */
+[Import(Clang.dll)] [LinkName("clang_getUnqualifiedType")] public static extern CXType GetUnqualifiedType(CXType CT);
+
+/**
+ * For reference types (e.g., "const int&"), returns the type that the
+ * reference refers to (e.g "const int").
+ *
+ * Otherwise, returns the type itself.
+ *
+ * A type that has kind \c CXType_LValueReference or
+ * \c CXType_RValueReference is a reference type.
+ */
+[Import(Clang.dll)] [LinkName("clang_getNonReferenceType")] public static extern CXType GetNonReferenceType(CXType CT);
 
 /**
  * Return the cursor for the declaration of the given type.
@@ -3994,8 +3663,8 @@ extension Clang
 
 /**
  * List the possible error codes for \c clang_Type_getSizeOf,
- *   \c clang_Type_getAlignOf, \c clang_Type_getOffsetOf and
- *   \c clang_Cursor_getOffsetOf.
+ *   \c clang_Type_getAlignOf, \c clang_Type_getOffsetOf,
+ *   \c clang_Cursor_getOffsetOf, and \c clang_getOffsetOfBase.
  *
  * A value of this enumeration type can be returned if the target type is not
  * a valid argument to sizeof, alignof or offsetof.
@@ -4159,16 +3828,19 @@ extension Clang
 [Import(Clang.dll)] [LinkName("clang_Type_getCXXRefQualifier")] public static extern CXRefQualifierKind Type_GetCXXRefQualifier(CXType T);
 
 /**
- * Returns non-zero if the cursor specifies a Record member that is a
- *   bitfield.
- */
-[Import(Clang.dll)] [LinkName("clang_Cursor_isBitField")] public static extern c_uint Cursor_IsBitField(CXCursor C);
-
-/**
  * Returns 1 if the base class specified by the cursor with kind
  *   CX_CXXBaseSpecifier is virtual.
  */
 [Import(Clang.dll)] [LinkName("clang_isVirtualBase")] public static extern c_uint IsVirtualBase(CXCursor);
+
+/**
+ * Returns the offset in bits of a CX_CXXBaseSpecifier relative to the parent
+ * class.
+ *
+ * Returns a small negative number if the offset cannot be computed. See
+ * CXTypeLayoutError for error codes.
+ */
+[Import(Clang.dll)] [LinkName("clang_getOffsetOfBase")] public static extern c_longlong GetOffsetOfBase(CXCursor Parent, CXCursor Base);
 }
 
 /**
@@ -4209,8 +3881,65 @@ extension Clang
   C_Register,
 }
 
+/**
+ * Represents a specific kind of binary operator which can appear at a cursor.
+ */
+[AllowDuplicates] public enum CX_BinaryOperatorKind : c_int {
+  O_Invalid = 0,
+  O_PtrMemD = 1,
+  O_PtrMemI = 2,
+  O_Mul = 3,
+  O_Div = 4,
+  O_Rem = 5,
+  O_Add = 6,
+  O_Sub = 7,
+  O_Shl = 8,
+  O_Shr = 9,
+  O_Cmp = 10,
+  O_LT = 11,
+  O_GT = 12,
+  O_LE = 13,
+  O_GE = 14,
+  O_EQ = 15,
+  O_NE = 16,
+  O_And = 17,
+  O_Xor = 18,
+  O_Or = 19,
+  O_LAnd = 20,
+  O_LOr = 21,
+  O_Assign = 22,
+  O_MulAssign = 23,
+  O_DivAssign = 24,
+  O_RemAssign = 25,
+  O_AddAssign = 26,
+  O_SubAssign = 27,
+  O_ShlAssign = 28,
+  O_ShrAssign = 29,
+  O_AndAssign = 30,
+  O_XorAssign = 31,
+  O_OrAssign = 32,
+  O_Comma = 33,
+  O_LAST = O_Comma,
+}
+
 extension Clang
 {
+/**
+ * \brief Returns the operator code for the binary operator.
+ *
+ * @deprecated: use clang_getCursorBinaryOperatorKind instead.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getBinaryOpcode")] public static extern CX_BinaryOperatorKind Cursor_GetBinaryOpcode(CXCursor C);
+
+/**
+ * \brief Returns a string containing the spelling of the binary operator.
+ *
+ * @deprecated: use clang_getBinaryOperatorKindSpelling instead
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getBinaryOpcodeStr")] public static extern CXString Cursor_GetBinaryOpcodeStr(CX_BinaryOperatorKind Op);
+
 /**
  * Returns the storage class for a function or variable declaration.
  *
@@ -4340,7 +4069,7 @@ extension Clang
  * prematurely by the visitor returning \c CXChildVisit_Break.
  */
 [Import(Clang.dll)] [LinkName("clang_visitChildren")] public static extern c_uint VisitChildren(CXCursor parent, CXCursorVisitor visitor, CXClientData client_data);
-
+}
 
 /**
  * Visitor invoked for each cursor found by a traversal.
@@ -4355,14 +4084,18 @@ extension Clang
 
 
 
+
+[CRepr] public struct _CXChildVisitResult; public struct CXCursorVisitorBlock : this(_CXChildVisitResult* ptr);
+
+
+extension Clang
+{
 /**
  * Visits the children of a cursor using the specified block.  Behaves
  * identically to clang_visitChildren() in all other respects.
  */
 
-
-
-
+[Import(Clang.dll)] [LinkName("clang_visitChildrenWithBlock")] public static extern c_uint VisitChildrenWithBlock(CXCursor parent, CXCursorVisitorBlock block);
 
 /**
  * @}
@@ -4524,6 +4257,24 @@ extension Clang
  * other cursors.
  */
 [Import(Clang.dll)] [LinkName("clang_getCursorPrettyPrinted")] public static extern CXString GetCursorPrettyPrinted(CXCursor Cursor, CXPrintingPolicy Policy);
+
+/**
+ * Pretty-print the underlying type using a custom printing policy.
+ *
+ * If the type is invalid, an empty string is returned.
+ */
+[Import(Clang.dll)] [LinkName("clang_getTypePrettyPrinted")] public static extern CXString GetTypePrettyPrinted(CXType CT, CXPrintingPolicy cxPolicy);
+
+/**
+ * Get the fully qualified name for a type.
+ *
+ * This includes full qualification of all template parameters.
+ *
+ * Policy - Further refine the type formatting
+ * WithGlobalNsPrefix - If non-zero, function will prepend a '::' to qualified
+ * names
+ */
+[Import(Clang.dll)] [LinkName("clang_getFullyQualifiedName")] public static extern CXString GetFullyQualifiedName(CXType CT, CXPrintingPolicy Policy, c_uint WithGlobalNsPrefix);
 
 /**
  * Retrieve the display name for the entity referenced by this cursor.
@@ -4782,6 +4533,122 @@ extension Clang
  * class interface or implementation at the cursor.
  */
 [Import(Clang.dll)] [LinkName("clang_Cursor_getObjCManglings")] public static extern CXStringSet* Cursor_GetObjCManglings(CXCursor);
+
+/**
+ * @}
+ */
+
+/**
+ * \defgroup CINDEX_MODULE Inline Assembly introspection
+ *
+ * The functions in this group provide access to information about GCC-style
+ * inline assembly statements.
+ *
+ * @{
+ */
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, return the assembly template string.
+ * As per LLVM IR Assembly Template language, template placeholders for
+ * inputs and outputs are either of the form $N where N is a decimal number
+ * as an index into the input-output specification,
+ * or ${N:M} where N is a decimal number also as an index into the
+ * input-output specification and M is the template argument modifier.
+ * The index N in both cases points into the the total inputs and outputs,
+ * or more specifically, into the list of outputs followed by the inputs,
+ * starting from index 0 as the first available template argument.
+ *
+ * This function also returns a valid empty string if the cursor does not point
+ * at a GCC inline assembly block.
+ *
+ * Users are responsible for releasing the allocation of returned string via
+ * \c clang_disposeString.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getGCCAssemblyTemplate")] public static extern CXString Cursor_GetGCCAssemblyTemplate(CXCursor);
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, check if the assembly block has goto
+ * labels.
+ * This function also returns 0 if the cursor does not point at a GCC inline
+ * assembly block.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_isGCCAssemblyHasGoto")] public static extern c_uint Cursor_IsGCCAssemblyHasGoto(CXCursor);
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, count the number of outputs.
+ * This function also returns 0 if the cursor does not point at a GCC inline
+ * assembly block.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getGCCAssemblyNumOutputs")] public static extern c_uint Cursor_GetGCCAssemblyNumOutputs(CXCursor);
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, count the number of inputs.
+ * This function also returns 0 if the cursor does not point at a GCC inline
+ * assembly block.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getGCCAssemblyNumInputs")] public static extern c_uint Cursor_GetGCCAssemblyNumInputs(CXCursor);
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, get the constraint and expression cursor
+ * to the Index-th input.
+ * This function returns 1 when the cursor points at a GCC inline assembly
+ * statement, `Index` is within bounds and both the `Constraint` and `Expr` are
+ * not NULL.
+ * Otherwise, this function returns 0 but leaves `Constraint` and `Expr`
+ * intact.
+ *
+ * Users are responsible for releasing the allocation of `Constraint` via
+ * \c clang_disposeString.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getGCCAssemblyInput")] public static extern c_uint Cursor_GetGCCAssemblyInput(CXCursor Cursor, c_uint Index, CXString* Constraint, CXCursor* Expr);
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, get the constraint and expression cursor
+ * to the Index-th output.
+ * This function returns 1 when the cursor points at a GCC inline assembly
+ * statement, `Index` is within bounds and both the `Constraint` and `Expr` are
+ * not NULL.
+ * Otherwise, this function returns 0 but leaves `Constraint` and `Expr`
+ * intact.
+ *
+ * Users are responsible for releasing the allocation of `Constraint` via
+ * \c clang_disposeString.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getGCCAssemblyOutput")] public static extern c_uint Cursor_GetGCCAssemblyOutput(CXCursor Cursor, c_uint Index, CXString* Constraint, CXCursor* Expr);
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, count the clobbers in it.
+ * This function also returns 0 if the cursor does not point at a GCC inline
+ * assembly block.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getGCCAssemblyNumClobbers")] public static extern c_uint Cursor_GetGCCAssemblyNumClobbers(CXCursor Cursor);
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, get the Index-th clobber of it.
+ * This function returns a valid empty string if the cursor does not point
+ * at a GCC inline assembly block or `Index` is out of bounds.
+ *
+ * Users are responsible for releasing the allocation of returned string via
+ * \c clang_disposeString.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_getGCCAssemblyClobber")] public static extern CXString Cursor_GetGCCAssemblyClobber(CXCursor Cursor, c_uint Index);
+
+/**
+ * Given a CXCursor_GCCAsmStmt cursor, check if the inline assembly is
+ * `volatile`.
+ * This function returns 0 if the cursor does not point at a GCC inline
+ * assembly block.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_Cursor_isGCCAssemblyVolatile")] public static extern c_uint Cursor_IsGCCAssemblyVolatile(CXCursor Cursor);
 }
 
 /**
@@ -4910,6 +4777,11 @@ extension Clang
 [Import(Clang.dll)] [LinkName("clang_CXXMethod_isDefaulted")] public static extern c_uint CXXMethod_IsDefaulted(CXCursor C);
 
 /**
+ * Determine if a C++ method is declared '= delete'.
+ */
+[Import(Clang.dll)] [LinkName("clang_CXXMethod_isDeleted")] public static extern c_uint CXXMethod_IsDeleted(CXCursor C);
+
+/**
  * Determine if a C++ member function or member function template is
  * pure virtual.
  */
@@ -4927,6 +4799,101 @@ extension Clang
  * one of the base classes.
  */
 [Import(Clang.dll)] [LinkName("clang_CXXMethod_isVirtual")] public static extern c_uint CXXMethod_IsVirtual(CXCursor C);
+
+/**
+ * Determine if a C++ member function is a copy-assignment operator,
+ * returning 1 if such is the case and 0 otherwise.
+ *
+ * > A copy-assignment operator `X::operator=` is a non-static,
+ * > non-template member function of _class_ `X` with exactly one
+ * > parameter of type `X`, `X&`, `const X&`, `volatile X&` or `const
+ * > volatile X&`.
+ *
+ * That is, for example, the `operator=` in:
+ *
+ *    class Foo {
+ *        bool operator=(const volatile Foo&);
+ *    };
+ *
+ * Is a copy-assignment operator, while the `operator=` in:
+ *
+ *    class Bar {
+ *        bool operator=(const int&);
+ *    };
+ *
+ * Is not.
+ */
+[Import(Clang.dll)] [LinkName("clang_CXXMethod_isCopyAssignmentOperator")] public static extern c_uint CXXMethod_IsCopyAssignmentOperator(CXCursor C);
+
+/**
+ * Determine if a C++ member function is a move-assignment operator,
+ * returning 1 if such is the case and 0 otherwise.
+ *
+ * > A move-assignment operator `X::operator=` is a non-static,
+ * > non-template member function of _class_ `X` with exactly one
+ * > parameter of type `X&&`, `const X&&`, `volatile X&&` or `const
+ * > volatile X&&`.
+ *
+ * That is, for example, the `operator=` in:
+ *
+ *    class Foo {
+ *        bool operator=(const volatile Foo&&);
+ *    };
+ *
+ * Is a move-assignment operator, while the `operator=` in:
+ *
+ *    class Bar {
+ *        bool operator=(const int&&);
+ *    };
+ *
+ * Is not.
+ */
+[Import(Clang.dll)] [LinkName("clang_CXXMethod_isMoveAssignmentOperator")] public static extern c_uint CXXMethod_IsMoveAssignmentOperator(CXCursor C);
+
+/**
+ * Determines if a C++ constructor or conversion function was declared
+ * explicit, returning 1 if such is the case and 0 otherwise.
+ *
+ * Constructors or conversion functions are declared explicit through
+ * the use of the explicit specifier.
+ *
+ * For example, the following constructor and conversion function are
+ * not explicit as they lack the explicit specifier:
+ *
+ *     class Foo {
+ *         Foo();
+ *         operator int();
+ *     };
+ *
+ * While the following constructor and conversion function are
+ * explicit as they are declared with the explicit specifier.
+ *
+ *     class Foo {
+ *         explicit Foo();
+ *         explicit operator int();
+ *     };
+ *
+ * This function will return 0 when given a cursor pointing to one of
+ * the former declarations and it will return 1 for a cursor pointing
+ * to the latter declarations.
+ *
+ * The explicit specifier allows the user to specify a
+ * conditional compile-time expression whose value decides
+ * whether the marked element is explicit or not.
+ *
+ * For example:
+ *
+ *     constexpr bool foo(int i) { return i % 2 == 0; }
+ *
+ *     class Foo {
+ *          explicit(foo(1)) Foo();
+ *          explicit(foo(2)) operator int();
+ *     }
+ *
+ * This function will return 0 for the constructor and 1 for
+ * the conversion function.
+ */
+[Import(Clang.dll)] [LinkName("clang_CXXMethod_isExplicit")] public static extern c_uint CXXMethod_IsExplicit(CXCursor C);
 
 /**
  * Determine if a C++ record is abstract, i.e. whether a class or struct
@@ -6131,66 +6098,6 @@ extension Clang
  * @}
  */
 
-/** \defgroup CINDEX_REMAPPING Remapping functions
- *
- * @{
- */
-
-/**
- * A remapping of original source files and their translated files.
- */
-public struct CXRemapping : this(void* ptr);
-
-extension Clang
-{
-/**
- * Retrieve a remapping.
- *
- * \param path the path that contains metadata about remappings.
- *
- * \returns the requested remapping. This remapping must be freed
- * via a call to \c clang_remap_dispose(). Can return NULL if an error occurred.
- */
-[Import(Clang.dll)] [LinkName("clang_getRemappings")] public static extern CXRemapping GetRemappings(c_char* path);
-
-/**
- * Retrieve a remapping.
- *
- * \param filePaths pointer to an array of file paths containing remapping info.
- *
- * \param numFiles number of file paths.
- *
- * \returns the requested remapping. This remapping must be freed
- * via a call to \c clang_remap_dispose(). Can return NULL if an error occurred.
- */
-
-[Import(Clang.dll)] [LinkName("clang_getRemappingsFromFileList")] public static extern CXRemapping GetRemappingsFromFileList(c_char** filePaths, c_uint numFiles);
-
-/**
- * Determine the number of remappings.
- */
-[Import(Clang.dll)] [LinkName("clang_remap_getNumFiles")] public static extern c_uint Remap_GetNumFiles(CXRemapping);
-
-/**
- * Get the original and the associated filename from the remapping.
- *
- * \param original If non-NULL, will be set to the original filename.
- *
- * \param transformed If non-NULL, will be set to the filename that the original
- * is associated with.
- */
-[Import(Clang.dll)] [LinkName("clang_remap_getFilenames")] public static extern void Remap_GetFilenames(CXRemapping, c_uint index, CXString* original, CXString* transformed);
-
-/**
- * Dispose the remapping.
- */
-[Import(Clang.dll)] [LinkName("clang_remap_dispose")] public static extern void Remap_Dispose(CXRemapping);
-}
-
-/**
- * @}
- */
-
 /** \defgroup CINDEX_HIGH Higher level API functions
  *
  * @{
@@ -6251,6 +6158,18 @@ extension Clang
  * \returns one of the CXResult enumerators.
  */
 [Import(Clang.dll)] [LinkName("clang_findIncludesInFile")] public static extern CXResult FindIncludesInFile(CXTranslationUnit TU, CXFile file, CXCursorAndRangeVisitor visitor);
+}
+
+[CRepr] public struct _CXCursorAndRangeVisitorBlock; public struct CXCursorAndRangeVisitorBlock : this(_CXCursorAndRangeVisitorBlock* ptr);
+
+
+
+extension Clang
+{
+[Import(Clang.dll)] [LinkName("clang_findReferencesInFileWithBlock")] public static extern CXResult FindReferencesInFileWithBlock(CXCursor, CXFile, CXCursorAndRangeVisitorBlock);
+
+
+[Import(Clang.dll)] [LinkName("clang_findIncludesInFileWithBlock")] public static extern CXResult FindIncludesInFileWithBlock(CXTranslationUnit, CXFile, CXCursorAndRangeVisitorBlock);
 }
 
 /**
@@ -6850,6 +6769,193 @@ extension Clang
  * prematurely by the visitor returning \c CXFieldVisit_Break.
  */
 [Import(Clang.dll)] [LinkName("clang_Type_visitFields")] public static extern c_uint Type_VisitFields(CXType T, CXFieldVisitor visitor, CXClientData client_data);
+
+/**
+ * Visit the base classes of a type.
+ *
+ * This function visits all the direct base classes of a the given cursor,
+ * invoking the given \p visitor function with the cursors of each
+ * visited base. The traversal may be ended prematurely, if
+ * the visitor returns \c CXFieldVisit_Break.
+ *
+ * \param T the record type whose field may be visited.
+ *
+ * \param visitor the visitor function that will be invoked for each
+ * field of \p T.
+ *
+ * \param client_data pointer data supplied by the client, which will
+ * be passed to the visitor each time it is invoked.
+ *
+ * \returns a non-zero value if the traversal was terminated
+ * prematurely by the visitor returning \c CXFieldVisit_Break.
+ */
+[Import(Clang.dll)] [LinkName("clang_visitCXXBaseClasses")] public static extern c_uint VisitCXXBaseClasses(CXType T, CXFieldVisitor visitor, CXClientData client_data);
+
+/**
+ * Visit the class methods of a type.
+ *
+ * This function visits all the methods of the given cursor,
+ * invoking the given \p visitor function with the cursors of each
+ * visited method. The traversal may be ended prematurely, if
+ * the visitor returns \c CXFieldVisit_Break.
+ *
+ * \param T The record type whose field may be visited.
+ *
+ * \param visitor The visitor function that will be invoked for each
+ * field of \p T.
+ *
+ * \param client_data Pointer data supplied by the client, which will
+ * be passed to the visitor each time it is invoked.
+ *
+ * \returns A non-zero value if the traversal was terminated
+ * prematurely by the visitor returning \c CXFieldVisit_Break.
+ */
+[Import(Clang.dll)] [LinkName("clang_visitCXXMethods")] public static extern c_uint VisitCXXMethods(CXType T, CXFieldVisitor visitor, CXClientData client_data);
+}
+
+/**
+ * Describes the kind of binary operators.
+ */
+[AllowDuplicates] public enum CXBinaryOperatorKind : c_int {
+  /** This value describes cursors which are not binary operators. */
+  Invalid = 0,
+  /** C++ Pointer - to - member operator. */
+  PtrMemD = 1,
+  /** C++ Pointer - to - member operator. */
+  PtrMemI = 2,
+  /** Multiplication operator. */
+  Mul = 3,
+  /** Division operator. */
+  Div = 4,
+  /** Remainder operator. */
+  Rem = 5,
+  /** Addition operator. */
+  Add = 6,
+  /** Subtraction operator. */
+  Sub = 7,
+  /** Bitwise shift left operator. */
+  Shl = 8,
+  /** Bitwise shift right operator. */
+  Shr = 9,
+  /** C++ three-way comparison (spaceship) operator. */
+  Cmp = 10,
+  /** Less than operator. */
+  LT = 11,
+  /** Greater than operator. */
+  GT = 12,
+  /** Less or equal operator. */
+  LE = 13,
+  /** Greater or equal operator. */
+  GE = 14,
+  /** Equal operator. */
+  EQ = 15,
+  /** Not equal operator. */
+  NE = 16,
+  /** Bitwise AND operator. */
+  And = 17,
+  /** Bitwise XOR operator. */
+  Xor = 18,
+  /** Bitwise OR operator. */
+  Or = 19,
+  /** Logical AND operator. */
+  LAnd = 20,
+  /** Logical OR operator. */
+  LOr = 21,
+  /** Assignment operator. */
+  Assign = 22,
+  /** Multiplication assignment operator. */
+  MulAssign = 23,
+  /** Division assignment operator. */
+  DivAssign = 24,
+  /** Remainder assignment operator. */
+  RemAssign = 25,
+  /** Addition assignment operator. */
+  AddAssign = 26,
+  /** Subtraction assignment operator. */
+  SubAssign = 27,
+  /** Bitwise shift left assignment operator. */
+  ShlAssign = 28,
+  /** Bitwise shift right assignment operator. */
+  ShrAssign = 29,
+  /** Bitwise AND assignment operator. */
+  AndAssign = 30,
+  /** Bitwise XOR assignment operator. */
+  XorAssign = 31,
+  /** Bitwise OR assignment operator. */
+  OrAssign = 32,
+  /** Comma operator. */
+  Comma = 33,
+  Last = Comma,
+}
+
+extension Clang
+{
+/**
+ * Retrieve the spelling of a given CXBinaryOperatorKind.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_getBinaryOperatorKindSpelling")] public static extern CXString GetBinaryOperatorKindSpelling(CXBinaryOperatorKind kind);
+
+/**
+ * Retrieve the binary operator kind of this cursor.
+ *
+ * If this cursor is not a binary operator then returns Invalid.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_getCursorBinaryOperatorKind")] public static extern CXBinaryOperatorKind GetCursorBinaryOperatorKind(CXCursor cursor);
+}
+
+/**
+ * Describes the kind of unary operators.
+ */
+[AllowDuplicates] public enum CXUnaryOperatorKind : c_int {
+  /** This value describes cursors which are not unary operators. */
+  Invalid,
+  /** Postfix increment operator. */
+  PostInc,
+  /** Postfix decrement operator. */
+  PostDec,
+  /** Prefix increment operator. */
+  PreInc,
+  /** Prefix decrement operator. */
+  PreDec,
+  /** Address of operator. */
+  AddrOf,
+  /** Dereference operator. */
+  Deref,
+  /** Plus operator. */
+  Plus,
+  /** Minus operator. */
+  Minus,
+  /** Not operator. */
+  Not,
+  /** LNot operator. */
+  LNot,
+  /** "__real expr" operator. */
+  Real,
+  /** "__imag expr" operator. */
+  Imag,
+  /** __extension__ marker operator. */
+  Extension,
+  /** C++ co_await operator. */
+  Coawait,
+}
+
+extension Clang
+{
+/**
+ * Retrieve the spelling of a given CXUnaryOperatorKind.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_getUnaryOperatorKindSpelling")] public static extern CXString GetUnaryOperatorKindSpelling(CXUnaryOperatorKind kind);
+
+/**
+ * Retrieve the unary operator kind of this cursor.
+ *
+ * If this cursor is not a unary operator then returns Invalid.
+ */
+
+[Import(Clang.dll)] [LinkName("clang_getCursorUnaryOperatorKind")] public static extern CXUnaryOperatorKind GetCursorUnaryOperatorKind(CXCursor cursor);
 }
 
 /**
@@ -6860,5 +6966,21 @@ extension Clang
  * @}
  */
 
+/* CINDEX_DEPRECATED - disabled to silence MSVC deprecation warnings */
+public struct CXRemapping : this(void* ptr);
 
+extension Clang
+{
+[Import(Clang.dll)] [Obsolete] [LinkName("clang_getRemappings")] public static extern CXRemapping GetRemappings(c_char*);
+
+
+[Import(Clang.dll)] [Obsolete] [LinkName("clang_getRemappingsFromFileList")] public static extern CXRemapping GetRemappingsFromFileList(c_char**, c_uint);
+
+[Import(Clang.dll)] [Obsolete] [LinkName("clang_remap_getNumFiles")] public static extern c_uint Remap_GetNumFiles(CXRemapping);
+
+
+[Import(Clang.dll)] [Obsolete] [LinkName("clang_remap_getFilenames")] public static extern void Remap_GetFilenames(CXRemapping, c_uint, CXString*, CXString*);
+
+[Import(Clang.dll)] [Obsolete] [LinkName("clang_remap_dispose")] public static extern void Remap_Dispose(CXRemapping);
+}
 

@@ -108,7 +108,7 @@ extension Clang
 }
 
 /**
- * Object encapsulating information about a module.map file.
+ * Object encapsulating information about a module.modulemap file.
  */
 [CRepr] public struct CXModuleMapDescriptorImpl; public struct CXModuleMapDescriptor : this(CXModuleMapDescriptorImpl* ptr);
 
@@ -124,14 +124,14 @@ extension Clang
 [Import(Clang.dll)] [LinkName("clang_ModuleMapDescriptor_create")] public static extern CXModuleMapDescriptor ModuleMapDescriptor_Create(c_uint options);
 
 /**
- * Sets the framework module name that the module.map describes.
+ * Sets the framework module name that the module.modulemap describes.
  * \returns 0 for success, non-zero to indicate an error.
  */
 
 [Import(Clang.dll)] [LinkName("clang_ModuleMapDescriptor_setFrameworkModuleName")] public static extern CXErrorCode ModuleMapDescriptor_SetFrameworkModuleName(CXModuleMapDescriptor, c_char* name);
 
 /**
- * Sets the umbrella header name that the module.map describes.
+ * Sets the umbrella header name that the module.modulemap describes.
  * \returns 0 for success, non-zero to indicate an error.
  */
 

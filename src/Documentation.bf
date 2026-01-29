@@ -32,6 +32,7 @@ static
 
 
 
+
 /**
  * \defgroup CINDEX_COMMENT Comment introspection
  *
@@ -558,6 +559,70 @@ extension Clang
  * \returns string containing an XML document.
  */
 [Import(Clang.dll)] [LinkName("clang_FullComment_getAsXML")] public static extern CXString FullComment_GetAsXML(CXComment Comment);
+}
+
+/**
+ * CXAPISet is an opaque type that represents a data structure containing all
+ * the API information for a given translation unit. This can be used for a
+ * single symbol symbol graph for a given symbol.
+ */
+[CRepr] public struct CXAPISetImpl; public struct CXAPISet : this(CXAPISetImpl* ptr);
+
+extension Clang
+{
+/**
+ * Traverses the translation unit to create a \c CXAPISet.
+ *
+ * \param tu is the \c CXTranslationUnit to build the \c CXAPISet for.
+ *
+ * \param out_api is a pointer to the output of this function. It is needs to be
+ * disposed of by calling clang_disposeAPISet.
+ *
+ * \returns Error code indicating success or failure of the APISet creation.
+ */
+[Import(Clang.dll)] [LinkName("clang_createAPISet")] public static extern CXErrorCode CreateAPISet(CXTranslationUnit tu, CXAPISet* out_api);
+
+/**
+ * Dispose of an APISet.
+ *
+ * The provided \c CXAPISet can not be used after this function is called.
+ */
+[Import(Clang.dll)] [LinkName("clang_disposeAPISet")] public static extern void DisposeAPISet(CXAPISet api);
+
+/**
+ * Generate a single symbol symbol graph for the given USR. Returns a null
+ * string if the associated symbol can not be found in the provided \c CXAPISet.
+ *
+ * The output contains the symbol graph as well as some additional information
+ * about related symbols.
+ *
+ * \param usr is a string containing the USR of the symbol to generate the
+ * symbol graph for.
+ *
+ * \param api the \c CXAPISet to look for the symbol in.
+ *
+ * \returns a string containing the serialized symbol graph representation for
+ * the symbol being queried or a null string if it can not be found in the
+ * APISet.
+ */
+[Import(Clang.dll)] [LinkName("clang_getSymbolGraphForUSR")] public static extern CXString GetSymbolGraphForUSR(c_char* usr, CXAPISet api);
+
+/**
+ * Generate a single symbol symbol graph for the declaration at the given
+ * cursor. Returns a null string if the AST node for the cursor isn't a
+ * declaration.
+ *
+ * The output contains the symbol graph as well as some additional information
+ * about related symbols.
+ *
+ * \param cursor the declaration for which to generate the single symbol symbol
+ * graph.
+ *
+ * \returns a string containing the serialized symbol graph representation for
+ * the symbol being queried or a null string if it can not be found in the
+ * APISet.
+ */
+[Import(Clang.dll)] [LinkName("clang_getSymbolGraphForCursor")] public static extern CXString GetSymbolGraphForCursor(CXCursor cursor);
 }
 
 /**
